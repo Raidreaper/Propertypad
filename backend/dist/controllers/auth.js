@@ -1,0 +1,229 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AuthController = void 0;
+const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const User_1 = __importDefault(require("../models/User"));
+class AuthController {
+    constructor() {
+        this.register = async (req, res) => {
+            try {
+                console.log('Registration request received:', {
+                    body: { ...req.body, password: '[REDACTED]' },
+                    headers: req.headers
+                });
+                const { firstName, lastName, email, password } = req.body;
+                // Validate required fields
+                if (!firstName || !lastName || !email || !password) {
+                    console.log('Missing required fields:', { firstName: !!firstName, lastName: !!lastName, email: !!email, password: !!password });
+                    return res.status(400).json({ message: 'All fields are required' });
+                }
+                // Check if user already exists
+                let user = await User_1.default.findOne({ email });
+                if (user) {
+                    console.log('User already exists:', email);
+                    return res.status(400).json({ message: 'User already exists' });
+                }
+                // Create new user
+                user = new User_1.default({
+                    firstName,
+                    lastName,
+                    email,
+                    password
+                });
+                // Save user
+                try {
+                    await user.save();
+                    console.log('User registered successfully:', email);
+                }
+                catch (saveError) {
+                    console.error('Error saving user:', saveError);
+                    if (saveError.code === 11000) {
+                        return res.status(400).json({ message: 'Email already exists' });
+                    }
+                    throw saveError;
+                }
+                // Generate JWT token
+                const token = jsonwebtoken_1.default.sign({ id: user._id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '1d' });
+                res.status(201).json({
+                    token,
+                    user: {
+                        id: user._id,
+                        firstName: user.firstName,
+                        lastName: user.lastName,
+                        email: user.email,
+                        role: user.role
+                    }
+                });
+            }
+            catch (error) {
+                console.error('Registration error:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack
+                    });
+                }
+                res.status(500).json({
+                    message: 'Error registering user',
+                    error: process.env.NODE_ENV === 'development' ? error instanceof Error ? error.message : 'Unknown error' : undefined
+                });
+            }
+        };
+        this.login = async (req, res) => {
+            try {
+                console.log('Login request received:', {
+                    body: { ...req.body, password: '[REDACTED]' },
+                    headers: req.headers
+                });
+                const { email, password } = req.body;
+                // Validate required fields
+                if (!email || !password) {
+                    console.log('Missing required fields:', { email: !!email, password: !!password });
+                    return res.status(400).json({ message: 'Email and password are required' });
+                }
+                // Check if user exists
+                const user = await User_1.default.findOne({ email });
+                if (!user) {
+                    console.log('User not found:', email);
+                    return res.status(400).json({ message: 'Invalid email or password' });
+                }
+                // Check password
+                const isMatch = await user.comparePassword(password);
+                if (!isMatch) {
+                    console.log('Invalid password for user:', email);
+                    return res.status(400).json({ message: 'Invalid email or password' });
+                }
+                console.log('User logged in successfully:', email);
+                // Generate JWT token
+                const token = jsonwebtoken_1.default.sign({ id: user._id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '1d' });
+                res.json({
+                    token,
+                    user: {
+                        id: user._id,
+                        firstName: user.firstName,
+                        lastName: user.lastName,
+                        email: user.email,
+                        role: user.role
+                    }
+                });
+            }
+            catch (error) {
+                console.error('Login error:', error);
+                if (error instanceof Error) {
+                    console.error('Error details:', {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack
+                    });
+                }
+                res.status(500).json({
+                    message: 'Error logging in',
+                    error: process.env.NODE_ENV === 'development' ? error instanceof Error ? error.message : 'Unknown error' : undefined
+                });
+            }
+        };
+        this.getCurrentUser = async (req, res) => {
+            var _a;
+            try {
+                if (!((_a = req.user) === null || _a === void 0 ? void 0 : _a.id)) {
+                    return res.status(401).json({ message: 'Not authenticated' });
+                }
+                const user = await User_1.default.findById(req.user.id).select('-password');
+                if (!user) {
+                    return res.status(404).json({ message: 'User not found' });
+                }
+                res.json(user);
+            }
+            catch (error) {
+                console.error('Get current user error:', error);
+                res.status(500).json({
+                    message: 'Error fetching user',
+                    error: process.env.NODE_ENV === 'development' ? error instanceof Error ? error.message : 'Unknown error' : undefined
+                });
+            }
+        };
+        this.forgotPassword = async (req, res) => {
+            try {
+                const { email } = req.body;
+                const user = await User_1.default.findOne({ email });
+                if (!user) {
+                    return res.status(404).json({ message: 'User not found' });
+                }
+                // Generate reset token
+                const resetToken = jsonwebtoken_1.default.sign({ id: user._id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '1h' });
+                // Save reset token to user
+                user.resetPasswordToken = resetToken;
+                user.resetPasswordExpires = new Date(Date.now() + 3600000); // 1 hour
+                await user.save();
+                // TODO: Send email with reset token
+                console.log('Password reset token:', resetToken);
+                res.json({ message: 'Password reset email sent' });
+            }
+            catch (error) {
+                console.error('Forgot password error:', error);
+                res.status(500).json({
+                    message: 'Error processing forgot password request',
+                    error: process.env.NODE_ENV === 'development' ? error instanceof Error ? error.message : 'Unknown error' : undefined
+                });
+            }
+        };
+        this.resetPassword = async (req, res) => {
+            try {
+                const { token, password } = req.body;
+                // Verify token
+                const decoded = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+                const user = await User_1.default.findById(decoded.id);
+                if (!user) {
+                    return res.status(400).json({ message: 'Invalid token' });
+                }
+                // Update password
+                user.password = password;
+                user.resetPasswordToken = undefined;
+                user.resetPasswordExpires = undefined;
+                await user.save();
+                res.json({ message: 'Password reset successful' });
+            }
+            catch (error) {
+                console.error('Reset password error:', error);
+                res.status(500).json({
+                    message: 'Error resetting password',
+                    error: process.env.NODE_ENV === 'development' ? error instanceof Error ? error.message : 'Unknown error' : undefined
+                });
+            }
+        };
+        this.updatePassword = async (req, res) => {
+            var _a;
+            try {
+                if (!((_a = req.user) === null || _a === void 0 ? void 0 : _a.id)) {
+                    return res.status(401).json({ message: 'Not authenticated' });
+                }
+                const { currentPassword, newPassword } = req.body;
+                const user = await User_1.default.findById(req.user.id);
+                if (!user) {
+                    return res.status(404).json({ message: 'User not found' });
+                }
+                // Check current password
+                const isMatch = await user.comparePassword(currentPassword);
+                if (!isMatch) {
+                    return res.status(400).json({ message: 'Current password is incorrect' });
+                }
+                // Update password
+                user.password = newPassword;
+                await user.save();
+                res.json({ message: 'Password updated successfully' });
+            }
+            catch (error) {
+                console.error('Update password error:', error);
+                res.status(500).json({
+                    message: 'Error updating password',
+                    error: process.env.NODE_ENV === 'development' ? error instanceof Error ? error.message : 'Unknown error' : undefined
+                });
+            }
+        };
+    }
+}
+exports.AuthController = AuthController;
